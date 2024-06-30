@@ -38,7 +38,7 @@ typedef struct _REG_DISK_MOUNT_INFO
 #include <poppack.h>
 
 
-/* FUNCTIONS ****************************************************************/
+/* FUNCTIONS *****************************************************************/
 
 #ifdef DUMP_PARTITION_TABLE
 static
@@ -1502,13 +1502,23 @@ UpdateHwDiskNumbers(
     }
 }
 
-static
-VOID
+
+typedef NTSTATUS
+(NTAPI *PENUM_DEVICES_PROC)(
+    _In_ ULONG_PTR DeviceCtx, // _In_ PCWSTR DevicePath,
+    _In_ HANDLE DeviceHandle,
+    _In_opt_ PVOID Context);
+
+// PENUM_DEVICES_PROC
+static NTSTATUS
+NTAPI
 AddDiskToList(
-    IN HANDLE FileHandle,
-    IN ULONG DiskNumber,
-    IN PPARTLIST List)
+    _In_ ULONG_PTR DeviceCtx, // _In_ PCWSTR DevicePath,
+    _In_ HANDLE DeviceHandle,
+    _In_opt_ PVOID Context)
 {
+    PPARTLIST List = (PPARTLIST)Context;
+    ULONG DiskNumber = (ULONG)DeviceCtx;
     DISK_GEOMETRY DiskGeometry;
     SCSI_ADDRESS ScsiAddress;
     PDISKENTRY DiskEntry;
@@ -1527,7 +1537,7 @@ AddDiskToList(
     PDRIVE_LAYOUT_INFORMATION NewLayoutBuffer;
 
     /* Retrieve the drive geometry */
-    Status = NtDeviceIoControlFile(FileHandle,
+    Status = NtDeviceIoControlFile(DeviceHandle,
                                    NULL,
                                    NULL,
                                    NULL,
@@ -1538,12 +1548,12 @@ AddDiskToList(
                                    &DiskGeometry,
                                    sizeof(DiskGeometry));
     if (!NT_SUCCESS(Status))
-        return;
+        return Status;
 
     if (DiskGeometry.MediaType != FixedMedia &&
         DiskGeometry.MediaType != RemovableMedia)
     {
-        return;
+        return STATUS_UNRECOGNIZED_MEDIA;
     }
 
     /*
@@ -1551,7 +1561,7 @@ AddDiskToList(
      * of another type? To check this we need to retrieve the name of
      * the driver the disk device belongs to.
      */
-    Status = NtDeviceIoControlFile(FileHandle,
+    Status = NtDeviceIoControlFile(DeviceHandle,
                                    NULL,
                                    NULL,
                                    NULL,
@@ -1562,7 +1572,7 @@ AddDiskToList(
                                    &ScsiAddress,
                                    sizeof(ScsiAddress));
     if (!NT_SUCCESS(Status))
-        return;
+        return Status;
 
     /*
      * Check whether the disk is initialized, by looking at its MBR.
@@ -1572,11 +1582,11 @@ AddDiskToList(
     Mbr = (PARTITION_SECTOR*)RtlAllocateHeap(ProcessHeap,
                                              0,
                                              DiskGeometry.BytesPerSector);
-    if (Mbr == NULL)
-        return;
+    if (!Mbr)
+        return STATUS_INSUFFICIENT_RESOURCES;
 
     FileOffset.QuadPart = 0;
-    Status = NtReadFile(FileHandle,
+    Status = NtReadFile(DeviceHandle,
                         NULL,
                         NULL,
                         NULL,
@@ -1589,7 +1599,7 @@ AddDiskToList(
     {
         RtlFreeHeap(ProcessHeap, 0, Mbr);
         DPRINT1("NtReadFile failed, status=%x\n", Status);
-        return;
+        return Status;
     }
     Signature = Mbr->Signature;
 
@@ -1611,11 +1621,11 @@ AddDiskToList(
     DiskEntry = RtlAllocateHeap(ProcessHeap,
                                 HEAP_ZERO_MEMORY,
                                 sizeof(DISKENTRY));
-    if (DiskEntry == NULL)
+    if (!DiskEntry)
     {
         RtlFreeHeap(ProcessHeap, 0, Mbr);
         DPRINT1("Failed to allocate a new disk entry.\n");
-        return;
+        return STATUS_INSUFFICIENT_RESOURCES;
     }
 
     DiskEntry->PartList = List;
@@ -1625,7 +1635,7 @@ AddDiskToList(
         FILE_FS_DEVICE_INFORMATION FileFsDevice;
 
         /* Query the device for its type */
-        Status = NtQueryVolumeInformationFile(FileHandle,
+        Status = NtQueryVolumeInformationFile(DeviceHandle,
                                               &Iosb,
                                               &FileFsDevice,
                                               sizeof(FileFsDevice),
@@ -1797,7 +1807,7 @@ AddDiskToList(
     if (DiskEntry->DiskStyle == PARTITION_STYLE_GPT)
     {
         DPRINT1("GPT-partitioned disk detected, not currently supported by SETUP!\n");
-        return;
+        return STATUS_NOT_SUPPORTED;
     }
 
     /* Allocate a layout buffer with 4 partition entries first */
@@ -1806,17 +1816,17 @@ AddDiskToList(
     DiskEntry->LayoutBuffer = RtlAllocateHeap(ProcessHeap,
                                               HEAP_ZERO_MEMORY,
                                               LayoutBufferSize);
-    if (DiskEntry->LayoutBuffer == NULL)
+    if (!DiskEntry->LayoutBuffer)
     {
         DPRINT1("Failed to allocate the disk layout buffer!\n");
-        return;
+        return STATUS_INSUFFICIENT_RESOURCES;
     }
 
     /* Keep looping while the drive layout buffer is too small */
     for (;;)
     {
         DPRINT1("Buffer size: %lu\n", LayoutBufferSize);
-        Status = NtDeviceIoControlFile(FileHandle,
+        Status = NtDeviceIoControlFile(DeviceHandle,
                                        NULL,
                                        NULL,
                                        NULL,
@@ -1832,7 +1842,7 @@ AddDiskToList(
         if (Status != STATUS_BUFFER_TOO_SMALL)
         {
             DPRINT1("NtDeviceIoControlFile() failed (Status: 0x%08lx)\n", Status);
-            return;
+            return Status;
         }
 
         LayoutBufferSize += 4 * sizeof(PARTITION_INFORMATION);
@@ -1840,10 +1850,10 @@ AddDiskToList(
                                             HEAP_ZERO_MEMORY,
                                             DiskEntry->LayoutBuffer,
                                             LayoutBufferSize);
-        if (NewLayoutBuffer == NULL)
+        if (!NewLayoutBuffer)
         {
             DPRINT1("Failed to reallocate the disk layout buffer!\n");
-            return;
+            return STATUS_INSUFFICIENT_RESOURCES;
         }
 
         DiskEntry->LayoutBuffer = NewLayoutBuffer;
@@ -1906,7 +1916,54 @@ AddDiskToList(
     }
 
     ScanForUnpartitionedDiskSpace(DiskEntry);
+
+    return STATUS_SUCCESS;
 }
+
+static NTSTATUS
+pEnumDisks(
+    _In_ PENUM_DEVICES_PROC Callback,
+    _In_opt_ PVOID Context)
+{
+    NTSTATUS Status;
+    SYSTEM_DEVICE_INFORMATION Sdi;
+    ULONG ReturnSize;
+    ULONG DiskNumber;
+    HANDLE DeviceHandle;
+    WCHAR Buffer[MAX_PATH];
+
+    /* Enumerate disks seen by NTOS */
+    Status = NtQuerySystemInformation(SystemDeviceInformation,
+                                      &Sdi,
+                                      sizeof(Sdi),
+                                      &ReturnSize);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("NtQuerySystemInformation() failed, Status 0x%08lx\n", Status);
+        return Status;
+    }
+
+    for (DiskNumber = 0; DiskNumber < Sdi.NumberOfDisks; ++DiskNumber)
+    {
+        RtlStringCchPrintfW(Buffer, _countof(Buffer),
+                            L"\\Device\\Harddisk%lu\\Partition0",
+                            DiskNumber);
+
+        Status = pOpenDevice(Buffer, &DeviceHandle);
+        if (NT_SUCCESS(Status))
+        {
+            /* Do the callback */
+            if (Callback)
+                (void)Callback(DiskNumber /*Buffer*/, DeviceHandle, Context);
+
+            NtClose(DeviceHandle);
+        }
+    }
+
+    DPRINT1("Detected %lu disks\n", Sdi.NumberOfDisks);
+    return STATUS_SUCCESS;
+}
+
 
 /*
  * Retrieve the system disk, i.e. the fixed disk that is accessible by the
@@ -2051,15 +2108,7 @@ CreatePartitionList(VOID)
 {
     PPARTLIST List;
     PDISKENTRY SystemDisk;
-    OBJECT_ATTRIBUTES ObjectAttributes;
-    SYSTEM_DEVICE_INFORMATION Sdi;
-    IO_STATUS_BLOCK Iosb;
-    ULONG ReturnSize;
     NTSTATUS Status;
-    ULONG DiskNumber;
-    HANDLE FileHandle;
-    UNICODE_STRING Name;
-    WCHAR Buffer[MAX_PATH];
 
     List = (PPARTLIST)RtlAllocateHeap(ProcessHeap,
                                       0,
@@ -2080,42 +2129,13 @@ CreatePartitionList(VOID)
      */
     EnumerateBiosDiskEntries(List);
 
-    /* Enumerate disks seen by NTOS */
-    Status = NtQuerySystemInformation(SystemDeviceInformation,
-                                      &Sdi,
-                                      sizeof(Sdi),
-                                      &ReturnSize);
+    /* Enumerate disks and partitions on the system */
+    Status = pEnumDisks(AddDiskToList, List);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("NtQuerySystemInformation() failed, Status 0x%08lx\n", Status);
-        RtlFreeHeap(ProcessHeap, 0, List);
+        DPRINT1("Failed to enumerate disks on the system, Status 0x%08lx\n", Status);
+        RtlFreeHeap(ProcessHeap, 0, List); // DestroyPartitionList(List);
         return NULL;
-    }
-
-    for (DiskNumber = 0; DiskNumber < Sdi.NumberOfDisks; DiskNumber++)
-    {
-        RtlStringCchPrintfW(Buffer, ARRAYSIZE(Buffer),
-                            L"\\Device\\Harddisk%lu\\Partition0",
-                            DiskNumber);
-        RtlInitUnicodeString(&Name, Buffer);
-
-        InitializeObjectAttributes(&ObjectAttributes,
-                                   &Name,
-                                   OBJ_CASE_INSENSITIVE,
-                                   NULL,
-                                   NULL);
-
-        Status = NtOpenFile(&FileHandle,
-                            FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-                            &ObjectAttributes,
-                            &Iosb,
-                            FILE_SHARE_READ | FILE_SHARE_WRITE,
-                            FILE_SYNCHRONOUS_IO_NONALERT);
-        if (NT_SUCCESS(Status))
-        {
-            AddDiskToList(FileHandle, DiskNumber, List);
-            NtClose(FileHandle);
-        }
     }
 
     UpdateDiskSignatures(List);
