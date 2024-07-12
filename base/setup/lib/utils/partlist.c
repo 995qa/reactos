@@ -22,6 +22,13 @@
 
 // #define DUMP_PARTITION_TABLE
 
+/* Helper ASSERT to verify that a partition where a volume is mounted is valid */
+#define ASSERT_IS_VOLUME_PARTITION_VALID(PartEntry) \
+    ASSERT(PartEntry->IsPartitioned && \
+           !IsContainerPartition(PartEntry->PartitionType) && \
+           (PartEntry->SectorCount.QuadPart != 0LL))
+
+
 #include <pshpack1.h>
 typedef struct _REG_DISK_MOUNT_INFO
 {
@@ -3037,13 +3044,12 @@ DismountPartition(
 
     if (Volume)
     {
-        /* Partition validation checks */
-        ASSERT(Volume->PartEntry == PartEntry);
-        ASSERT(PartEntry->IsPartitioned);
-        ASSERT(PartEntry->PartitionType != PARTITION_ENTRY_UNUSED);
-        ASSERT(!IsContainerPartition(PartEntry->PartitionType));
+        /* The partition is mounted on the system */
 
-        /* Dismount the basic volume: unlink the volume from the list */
+        ASSERT(Volume->PartEntry == PartEntry);
+        ASSERT_IS_VOLUME_PARTITION_VALID(PartEntry);
+
+        /* Dismount the basic volume: unlink the volume from the volumes list */
         PartEntry->Volume = NULL;
         Volume->PartEntry = NULL;
         RemoveEntryList(&Volume->ListEntry);
