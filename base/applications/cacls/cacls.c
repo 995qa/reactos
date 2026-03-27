@@ -420,8 +420,8 @@ PrintDaclsOfFiles(LPCTSTR pszFiles)
         return FALSE;
     do
     {
-        if (FindData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-            continue;
+        //if (FindData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        //    continue;
 
         if (!PrintFileDacl(FilePath, FindData.cFileName))
         {
@@ -741,19 +741,20 @@ int _tmain(int argc, const TCHAR *argv[])
     /* Initialize the Console Standard Streams */
     ConInitStdStreams();
 
-    if (argc <= 1)
+    if ((argc <= 1) || (_tcsicmp(argv[1], _T("/?")) == 0))
     {
         ConResPuts(StdOut, IDS_HELP);
         return 0;
     }
 
-    // FIXME: Convert to proper parsing, with support for /?
-
-    /*
-     * parse command line options
-     */
+    /* Parse command line options */
     for (i = 2; i < argc; i++)
     {
+        if (_tcsicmp(argv[i], _T("/?")) == 0)
+        {
+            ConResPuts(StdOut, IDS_HELP);
+            return 0;
+        }
         if (_tcsicmp(argv[i], _T("/T")) == 0)
         {
             OptionT = TRUE;
