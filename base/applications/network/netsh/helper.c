@@ -38,7 +38,11 @@ StartHelpers(
         {
             if (pHelper->Attributes.pfnStart)
             {
-                dwError = pHelper->Attributes.pfnStart(NULL, 0);
+                //dwError = pHelper->Attributes.pfnStart(&pHelper->ParentHelperGuid, 0);
+                if (pHelper->pParentHelper)
+                    dwError = pHelper->Attributes.pfnStart(&pHelper->pParentHelper->Attributes.guidHelper, pHelper->pParentHelper->Attributes.dwVersion);
+                else
+                    dwError = pHelper->Attributes.pfnStart(NULL, 0);
                 if (dwError == ERROR_SUCCESS)
                     pHelper->bStarted = TRUE;
             }
@@ -415,6 +419,7 @@ RegisterHelper(
 
     if (pguidParentHelper == NULL)
     {
+        pHelper->pParentHelper = NULL;
         if ((pHelperListHead == NULL) && (pHelperListTail == NULL))
         {
             pHelperListHead = pHelper;
@@ -429,13 +434,15 @@ RegisterHelper(
     }
     else
     {
-        CopyMemory(&pHelper->ParentHelperGuid, pguidParentHelper, sizeof(GUID));
+        // TODO: pHelperAttributes->dwVersion
+        //CopyMemory(&pHelper->ParentHelperGuid, pguidParentHelper, sizeof(GUID));
         pParentHelper = FindHelper(pguidParentHelper, pHelperListHead);
         if (pParentHelper == NULL)
         {
             DPRINT("Parent helper %lx not found!\n", pguidParentHelper->Data1);
             return ERROR_INVALID_PARAMETER;
         }
+        pHelper->pParentHelper = pParentHelper;
 
         if ((pParentHelper->pSubHelperHead == NULL) && (pParentHelper->pSubHelperTail == NULL))
         {

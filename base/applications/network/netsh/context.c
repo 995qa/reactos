@@ -939,11 +939,17 @@ RegisterContext(
     pParentContext = pRootContext;
     if (pHelper != NULL)
     {
-        pParentContext = FindContextByGuid(&pHelper->ParentHelperGuid);
+        //pParentContext = FindContextByGuid(&pHelper->ParentHelperGuid);
+        if (pHelper->pParentHelper)
+            pParentContext = FindContextByGuid(&pHelper->pParentHelper->Attributes.guidHelper);
+        else
+            pParentContext = NULL;
         DPRINT("pParentContext %p\n", pParentContext);
         if (pParentContext == NULL)
             pParentContext = pRootContext;
     }
+
+    // TODO: Save pChildContext->dwVersion;
 
     pContext = AddContext(pParentContext, pChildContext->pwszContext, (GUID*)&pChildContext->guidHelper);
     if (pContext != NULL)
@@ -999,5 +1005,4 @@ VOID
 CleanupContext(VOID)
 {
     /* Delete the context stack */
-
 }

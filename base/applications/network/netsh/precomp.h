@@ -58,8 +58,9 @@ typedef struct _HELPER_ENTRY
     struct _HELPER_ENTRY *pPrev;
     struct _HELPER_ENTRY *pNext;
 
+    struct _HELPER_ENTRY *pParentHelper;
     NS_HELPER_ATTRIBUTES Attributes;
-    GUID ParentHelperGuid;
+    // GUID ParentHelperGuid;
 
     PDLL_LIST_ENTRY pDllEntry;
     BOOL bStarted;
